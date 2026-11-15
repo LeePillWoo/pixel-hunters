@@ -1,0 +1,30 @@
+{
+  "hunter": {
+    "frameWidth": 59,
+    "frameHeight": 52,
+    "frames": 6,
+    "originX": 0.4431,
+    "originY": 0.972
+  },
+  "dragon": {
+    "frameWidth": 108,
+    "frameHeight": 90,
+    "frames": 4,
+    "originX": 0.5369,
+    "originY": 0.9889
+  },
+  "slash": {
+    "frameWidth": 42,
+    "frameHeight": 66,
+    "frames": 5,
+    "originX": 0.5044,
+    "originY": 0.5
+  },
+  "companions": {
+    "frameWidth": 29,
+    "frameHeight": 31,
+    "frames": 8,
+    "originX": 0.4989,
+    "originY": 0.9785
+  }
+}
