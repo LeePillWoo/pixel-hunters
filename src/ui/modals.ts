@@ -1,14 +1,16 @@
 import Phaser from 'phaser';
 import { DEPTH, GAME_H, GAME_W, label } from '../config';
-import { FUSIONS, ITEMS, LINES, LINE_NAME, MAX_TIER } from '../data/items';
+import { FUSIONS, ITEMS, LINES, LINE_NAME, MAX_TIER, nextTier } from '../data/items';
 import { CHEST_MAX_LV, CHEST_PER_LV, chestLvCost, floorDef } from '../data/floors';
 import { COMPANIONS, COMP_LV_BONUS, COMP_MAX_LV, compLvCost, companionDef } from '../data/companions';
 import sprites from '../data/sprites.json';
 import { ENHANCE, HUNTER, WEAPONS } from '../data/weapons';
 import {
-  activeQuests, attack, bus, chestCap, completeQuest, consumeAll, countItem, hasAll, maxHp, spendGold, state, station, weaponPower,
+  activeQuests, addGold, attack, bus, chestCap, combineInBag, completeQuest, consumeAll, countItem, hasAll, maxHp, questNeeds, spendGold,
+  state, station, weaponPower,
 } from '../state';
 import { sfx } from '../audio';
+import { BAG_SECTIONS, bagSection, itemUses } from '../data/uses';
 import { STORY_QUESTS } from '../data/companions';
 import { button } from './widgets';
 
@@ -160,29 +162,91 @@ export function openQuests(scene: Phaser.Scene) {
   draw();
 }
 
-// ---------------------------------------------------------------- storage
+// ---------------------------------------------------------------- bag
 
+/** Stacked inventory, grouped by kind. Click an item for details and actions. */
 export function openStorage(scene: Phaser.Scene, withdraw: (id: string) => boolean) {
-  const m = new Modal(scene, 340, 220, '창고 — 누르면 합성판으로 꺼냅니다');
+  const m = new Modal(scene, 460, 262, '가방');
+  let selected: string | null = null;
   const draw = () => {
     m.body.removeAll(true);
-    const ids = Object.keys(state.storage).filter((id) => state.storage[id] > 0);
-    if (ids.length === 0) {
-      m.body.add(label(scene, 170, 110, '비어 있습니다. 아이템을 창고 버튼으로 끌어다 놓으세요.', { color: '#c8b8a8', origin: [0.5, 0.5], wrap: 260 }));
-      return;
-    }
-    ids.forEach((id, i) => {
-      const x = 12 + (i % 8) * 40;
-      const y = 30 + Math.floor(i / 8) * 44;
-      const slot = scene.add.image(x + 17, y + 17, 'slot', 0).setInteractive({ useHandCursor: true });
-      slot.on('pointerdown', () => {
-        if (withdraw(id)) draw();
-        else bus.emit('toast', '합성판에 빈칸이 없습니다');
+    const owned = Object.keys(state.storage).filter((id) => state.storage[id] > 0);
+    if (selected && !owned.includes(selected)) selected = null;
+    selected ??= owned[0] ?? null;
+
+    // left: one row per section, name on the left and stacked slots to its right
+    const PER_ROW = 6;
+    let y = 28;
+    for (const sec of BAG_SECTIONS) {
+      const ids = owned.filter((id) => bagSection(id) === sec.id).sort((p, q) => ITEMS[p].frame - ITEMS[q].frame);
+      if (ids.length === 0 && sec.id === 'raw') continue;
+      m.body.add(label(scene, 10, y + 15, sec.name, { color: '#c8b8a8', wrap: 64, origin: [0, 0.5] }));
+      if (ids.length === 0) {
+        m.body.add(label(scene, 82, y + 15, '없음', { color: '#6a5a50', origin: [0, 0.5] }));
+        y += 34;
+        continue;
+      }
+      ids.forEach((id, i) => {
+        const x = 78 + (i % PER_ROW) * 32;
+        const yy = y + Math.floor(i / PER_ROW) * 32;
+        const slot = scene.add.image(x + 15, yy + 15, 'slot', 0).setDisplaySize(30, 30).setInteractive({ useHandCursor: true });
+        slot.on('pointerdown', () => {
+          selected = id;
+          draw();
+        });
+        m.body.add(slot);
+        if (id === selected) m.body.add(scene.add.rectangle(x + 15, yy + 15, 30, 30).setStrokeStyle(2, 0xffd84a));
+        m.body.add(scene.add.image(x + 15, yy + 15, 'items', ITEMS[id].frame));
+        m.body.add(label(scene, x + 29, yy + 18, `${state.storage[id]}`, { stroke: true, origin: [1, 0] }));
       });
-      m.body.add(slot);
-      m.body.add(scene.add.image(x + 17, y + 17, 'items', ITEMS[id].frame));
-      m.body.add(label(scene, x + 32, y + 24, `${state.storage[id]}`, { stroke: true, origin: [1, 0] }));
-    });
+      y += Math.ceil(ids.length / PER_ROW) * 32 + 2;
+    }
+    if (owned.length === 0) {
+      m.body.add(label(scene, 140, 130, '포션과 T3 이상 재료, 보스 소재는\n만들어지면 자동으로 가방에 들어옵니다.', {
+        color: '#c8b8a8', origin: [0.5, 0.5],
+      }));
+    }
+
+    // right: details of the selected item
+    const px = 278;
+    m.body.add(scene.add.nineslice(px, 26, 'btn_dark', undefined, 172, 228, 6, 6, 6, 6).setOrigin(0));
+    if (!selected) return;
+    const id = selected;
+    const def = ITEMS[id];
+    const n = state.storage[id];
+    m.body.add(scene.add.image(px + 20, 46, 'items', def.frame));
+    m.body.add(label(scene, px + 38, 34, def.name, { size: 'md' }));
+    m.body.add(label(scene, px + 38, 50, `${n}개 · 개당 ${def.sell}G`, { color: '#ffd84a' }));
+    const lines = itemUses(id);
+    const need = questNeeds().get(id);
+    if (need) lines.unshift(`의뢰에 필요: ${need.need}개`);
+    m.body.add(label(scene, px + 8, 68, lines.length ? lines.join('\n') : '판매용', { color: '#c8b8a8', wrap: 156 }));
+
+    const next = nextTier(id);
+    const keep = need?.need ?? 0;
+    const pairs = next ? Math.floor(Math.max(0, n - keep) / 2) : 0;
+    const by = 160;
+    if (next) {
+      const cb = button(scene, px + 8, by, 156, 22, `합치기 → ${ITEMS[next].name} ${pairs}개`, () => {
+        if (combineInBag(id) > 0) sfx('merge');
+        draw();
+      }, { key: 'btn_yellow' });
+      cb.setEnabled(pairs > 0);
+      m.body.add(cb);
+    }
+    m.body.add(button(scene, px + 8, by + 26, 156, 22, '합성판으로 꺼내기', () => {
+      if (withdraw(id)) {
+        sfx('pop');
+        draw();
+      } else bus.emit('toast', '합성판에 빈칸이 없습니다');
+    }));
+    m.body.add(button(scene, px + 8, by + 52, 156, 22, `1개 판매 (+${def.sell}G)`, () => {
+      state.storage[id]--;
+      addGold(def.sell);
+      bus.emit('storage');
+      sfx('coin');
+      draw();
+    }, { key: 'btn_dark' }));
   };
   draw();
 }

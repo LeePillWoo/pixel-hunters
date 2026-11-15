@@ -258,8 +258,9 @@ export class TowerPanel {
       row.chest.setFrame(n > 0 ? 1 : 0);
       row.chest.x = 206 + (full ? blink * 2 - 1 : 0);
       row.plus?.setAlpha(waiting && blink ? 1 : 0.45).setScale(waiting && blink ? 1.25 : 1);
-      if (row.worker) {
-        const base = companionDef(state.stationed[row.floor]).sprite * 2;
+      const who = state.stationed[row.floor];
+      if (row.worker && who) {
+        const base = companionDef(who).sprite * 2;
         row.worker.setFrame(base + (working ? blink : 0));
       }
     }

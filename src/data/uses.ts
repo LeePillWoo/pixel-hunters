@@ -19,3 +19,29 @@ export function itemUses(id: string): string[] {
 }
 
 export const isMaxTier = (id: string) => ITEMS[id]?.kind === 'mat' && ITEMS[id].tier === MAX_TIER;
+
+/**
+ * Finished goods go to the bag (stacked, no grid space): potions, crafting / enhancing materials (T3+),
+ * boss parts and fusion items. The merge grid keeps the raw T1-T2 materials.
+ */
+export const isBagItem = (id: string) => {
+  const d = ITEMS[id];
+  return !!d && (d.kind !== 'mat' || (d.tier ?? 0) >= 3);
+};
+
+export type BagSection = 'potion' | 'material' | 'boss' | 'special' | 'raw';
+export const BAG_SECTIONS: { id: BagSection; name: string }[] = [
+  { id: 'potion', name: '물약' },
+  { id: 'material', name: '제작 · 강화 재료' },
+  { id: 'boss', name: '보스 소재' },
+  { id: 'special', name: '융합 아이템' },
+  { id: 'raw', name: '보관한 재료' },
+];
+
+export function bagSection(id: string): BagSection {
+  const d = ITEMS[id];
+  if (d.kind === 'boss') return 'boss';
+  if (d.kind === 'fusion') return 'special';
+  if ((d.tier ?? 0) < 3) return 'raw';
+  return d.line === 'herb' ? 'potion' : 'material';
+}

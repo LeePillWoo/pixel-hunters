@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GRID_COLS, GRID_ROWS } from './config';
-import { ITEMS, discoverReward, type Line } from './data/items';
+import { ITEMS, discoverReward, nextTier, type Line } from './data/items';
+import { isBagItem } from './data/uses';
 import { CHEST_BASE, CHEST_PER_LV, FIRST_COMBAT_FLOOR, FLOOR_EVENT, MAX_FLOOR, PRODUCE_SECONDS, floorDef } from './data/floors';
 import { ENHANCE, HUNTER, weaponDef } from './data/weapons';
 import { COMP_LV_BONUS, SPECIALTY_BONUS, STORY_QUESTS, companionDef, type QuestDef } from './data/companions';
@@ -96,6 +97,11 @@ export function loadState(): number {
     const data = JSON.parse(raw) as GameState;
     if (data.v !== 1) return 0;
     state = { ...newState(), ...data };
+    // older saves kept finished goods on the grid; they live in the bag now
+    state.grid = state.grid.map((id) => {
+      if (id && isBagItem(id)) state.storage[id] = (state.storage[id] ?? 0) + 1;
+      return id && isBagItem(id) ? null : id;
+    });
     return Math.max(0, (Date.now() - state.lastSeen) / 1000);
   } catch {
     return 0;
@@ -191,6 +197,22 @@ export function addStorage(id: string, n = 1) {
 }
 
 export const storageTotal = () => Object.values(state.storage).reduce((a, b) => a + b, 0);
+
+/**
+ * Bag pairs -> next tier. Keeps back what open quests still need.
+ * Returns how many were made.
+ */
+export function combineInBag(id: string): number {
+  const next = nextTier(id);
+  const have = state.storage[id] ?? 0;
+  if (!next) return 0;
+  const keep = questNeeds().get(id)?.need ?? 0;
+  const pairs = Math.floor(Math.max(0, have - keep) / 2);
+  if (pairs === 0) return 0;
+  state.storage[id] = have - pairs * 2;
+  addStorage(next, pairs);
+  return pairs;
+}
 
 export function emptyCell(): number {
   for (let i = 0; i < CELLS; i++) {
