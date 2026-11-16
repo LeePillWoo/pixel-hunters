@@ -8,6 +8,7 @@ import {
   CELLS, addGold, addStorage, bus, discover, emptyCell, hasAll, questNeeds, reservedCells, spendGold, state, storageTotal,
   unlockCost,
 } from '../state';
+import { planMerges } from '../logic';
 import { floatText, sparkle, toast } from '../ui/widgets';
 
 const SIDE = { x: GRID_X + GRID_COLS * CELL + 6, w: 106, h: 31, gap: 4 };
@@ -302,37 +303,9 @@ export class MergePanel {
 
   // ---------------------------------------------------------------- auto-merge
 
-  /**
-   * Every merge the grid allows, chained up the tiers, as {from, to, result} steps.
-   * Items an open quest still needs are kept back (as many as the quest asks for, minus what the storage
-   * already holds), and secret fusions are left for the player to discover.
-   */
+  /** Planned auto-merge steps, leaving alone cells in flight or being dragged. */
   private planMerges() {
-    const needs = questNeeds();
-    const keep = (id: string) => Math.max(0, (needs.get(id)?.need ?? 0) - (state.storage[id] ?? 0));
-    const grid = [...state.grid];
-    const steps: { from: number; to: number; result: string }[] = [];
-    for (let changed = true; changed; ) {
-      changed = false;
-      const cells = new Map<string, number[]>();
-      grid.forEach((id, i) => {
-        // items taken out of the bag (for fusions) are left alone
-        if (id && nextTier(id) && !isBagItem(id) && !reservedCells.has(i) && i !== this.dragging) {
-          cells.set(id, [...(cells.get(id) ?? []), i]);
-        }
-      });
-      for (const [id, list] of cells) {
-        const free = list.slice(Math.min(keep(id), list.length));
-        for (let k = 0; k + 1 < free.length; k += 2) {
-          const result = nextTier(id)!;
-          steps.push({ from: free[k + 1], to: free[k], result });
-          grid[free[k]] = isBagItem(result) ? null : result;
-          grid[free[k + 1]] = null;
-          changed = true;
-        }
-      }
-    }
-    return steps;
+    return planMerges(new Set([...reservedCells, this.dragging]));
   }
 
   private autoMerge() {

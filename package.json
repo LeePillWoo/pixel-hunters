@@ -8,14 +8,18 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "art": "python tools/gen_placeholder_art.py && python tools/slice_sheets.py"
+    "art": "python tools/gen_placeholder_art.py && python tools/slice_sheets.py",
+    "desktop": "vite build && electron .",
+    "desktop:dev": "electron . --dev"
   },
   "dependencies": {
     "galmuri": "^2.40.3",
     "phaser": "^3.90.0"
   },
   "devDependencies": {
+    "electron": "^45.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
-  }
+  },
+  "main": "electron/main.cjs"
 }

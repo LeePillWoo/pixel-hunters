@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BATTLE, DEPTH, label, type LabelOpts } from '../config';
+import { sim } from '../sim';
 
 export interface ButtonOpts {
   key?: 'btn' | 'btn_yellow' | 'btn_dark';
@@ -39,17 +40,22 @@ export function button(
 
 /** Number / word that pops up and drifts away. */
 export function floatText(scene: Phaser.Scene, x: number, y: number, text: string, color = '#ffffff', size: 'sm' | 'md' = 'md') {
+  if (sim.fast) return;
   const t = label(scene, x, y, text, { size, color, stroke: true, origin: [0.5, 0.5] }).setDepth(DEPTH.fx);
   scene.tweens.add({ targets: t, y: y - 22, alpha: { from: 1, to: 0 }, duration: 800, ease: 'Quad.easeOut', onComplete: () => t.destroy() });
 }
 
 let toasts = 0;
+/** Where toasts appear (center x, first line y); the taskbar strip moves it. */
+const toastAt = { x: BATTLE.x + BATTLE.w / 2, y: BATTLE.y + 60, step: 16 };
+export const setToastAnchor = (x: number, y: number, step = 16) => Object.assign(toastAt, { x, y, step });
 
 /** Banner message over the battle view. */
 export function toast(scene: Phaser.Scene, text: string) {
-  const y = BATTLE.y + 60 + (toasts % 3) * 16;
+  if (sim.fast) return;
+  const y = toastAt.y + (toasts % 3) * toastAt.step;
   toasts++;
-  const t = label(scene, BATTLE.x + BATTLE.w / 2, y, text, { size: 'md', color: '#ffe890', stroke: true, origin: [0.5, 0.5] })
+  const t = label(scene, toastAt.x, y, text, { size: 'md', color: '#ffe890', stroke: true, origin: [0.5, 0.5] })
     .setDepth(DEPTH.toast);
   scene.tweens.add({
     targets: t, y: y - 10, alpha: { from: 1, to: 0 }, delay: 1600, duration: 500,
@@ -62,6 +68,7 @@ export function toast(scene: Phaser.Scene, text: string) {
 
 /** Little burst of square sparkles. */
 export function sparkle(scene: Phaser.Scene, x: number, y: number, color = 0xffe890, count = 8) {
+  if (sim.fast) return;
   for (let i = 0; i < count; i++) {
     const a = (Math.PI * 2 * i) / count + Math.random() * 0.4;
     const r = scene.add.rectangle(x, y, 2, 2, color).setDepth(DEPTH.fx);

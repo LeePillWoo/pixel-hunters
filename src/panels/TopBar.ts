@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { DEPTH, GAME_W, TOP_H, label } from '../config';
 import { weaponDef } from '../data/weapons';
 import { isMuted, setMuted } from '../audio';
+import { openMiniWindow } from '../display';
 import { activeQuests, attack, bus, hasAll, maxHp, state } from '../state';
 import { button, type Button } from '../ui/widgets';
 
@@ -19,6 +20,10 @@ export class TopBar {
     scene.add.image(10, 10, 'coin').setDepth(DEPTH.ui);
     this.gold = label(scene, 20, 4, '', { color: '#ffd84a' }).setDepth(DEPTH.ui);
     this.stats = label(scene, 92, 4, '', { color: '#c8b8a8' }).setDepth(DEPTH.ui);
+    // small window in the bottom-right corner of the screen
+    button(scene, GAME_W - 250, 1, 54, 18, '미니 창', () => {
+      if (!openMiniWindow()) bus.emit('toast', '팝업이 차단되었습니다. 주소창 오른쪽에서 팝업을 허용해 주세요');
+    }, { key: 'btn_dark' }).setDepth(DEPTH.ui);
     const sound = scene.add.image(GAME_W - 186, 10, 'icons', isMuted() ? 13 : 12).setDepth(DEPTH.ui).setInteractive({ useHandCursor: true });
     sound.on('pointerdown', () => {
       setMuted(!isMuted());

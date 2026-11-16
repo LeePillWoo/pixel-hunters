@@ -12,6 +12,7 @@
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # dist/ 에 웹 배포용 빌드
+npm run desktop  # 윈도우 데스크톱 앱 (오른쪽 아래 미니 창, Ctrl+Alt+P 숨기기/보이기)
 ```
 
 ## 폴더

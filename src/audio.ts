@@ -1,4 +1,5 @@
 // Tiny chiptune sound effects synthesized with WebAudio, so the game needs no audio files.
+import { sim } from './sim';
 
 type Wave = OscillatorType;
 interface Note {
@@ -76,7 +77,7 @@ export function setMuted(on: boolean) {
 }
 
 export function sfx(name: keyof typeof SOUNDS) {
-  if (muted || !ctx || ctx.state !== 'running') return;
+  if (muted || sim.fast || !ctx || ctx.state !== 'running') return;
   const now = ctx.currentTime;
   if (now - (lastPlayed[name] ?? -1) < MIN_GAP) return;
   lastPlayed[name] = now;

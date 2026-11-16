@@ -108,7 +108,12 @@ export function loadState(): number {
   }
 }
 
+let savingEnabled = true;
+/** Another window took over the game: this one must never write its (stale) state again. */
+export const stopSaving = () => (savingEnabled = false);
+
 export function saveState() {
+  if (!savingEnabled) return;
   state.lastSeen = Date.now();
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(state));

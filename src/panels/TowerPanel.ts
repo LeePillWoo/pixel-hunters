@@ -5,6 +5,8 @@ import { FLOOR_EVENT, floorDef } from '../data/floors';
 import { companionDef } from '../data/companions';
 import sprites from '../data/sprites.json';
 import { sfx } from '../audio';
+import { drainChests } from '../logic';
+import { sim } from '../sim';
 import { addGold, boosts, bus, chestCap, chestOf, frontline, idleCompanions, productionRate, state, tickProduction } from '../state';
 import { floatText } from '../ui/widgets';
 
@@ -214,7 +216,7 @@ export class TowerPanel {
   update(dt: number) {
     tickProduction(dt);
 
-    this.nextEvent -= dt;
+    this.nextEvent -= sim.fast ? 0 : dt;
     if (this.nextEvent <= 0) {
       this.nextEvent = Phaser.Math.Between(FLOOR_EVENT.minGap, FLOOR_EVENT.maxGap);
       this.spawnEvent();
@@ -227,6 +229,12 @@ export class TowerPanel {
       }
     }
     if (expired) this.rebuild();
+
+    // catching up in the background: no animation, chests empty straight into the grid
+    if (sim.fast) {
+      drainChests();
+      return;
+    }
 
     // one item at a time trickles from the chests into free grid cells
     this.flowTimer += dt;

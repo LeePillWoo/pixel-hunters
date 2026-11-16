@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BATTLE, DEPTH, label } from '../config';
+import { sim } from '../sim';
 import { sfx } from '../audio';
 import { ITEMS, LINES } from '../data/items';
 import { BOSS_PARTS, BREAK, DROP, FIRST_COMBAT_FLOOR, MAX_FLOOR, floorDef, type MonsterDef } from '../data/floors';
@@ -8,10 +9,14 @@ import sprites from '../data/sprites.json';
 import { addGold, addStorage, attack, bus, consumeAll, countItem, frontline, maxHp, state, weaponPower } from '../state';
 import { button, floatText, sparkle, toast, type Button } from '../ui/widgets';
 
-const GROUND_Y = BATTLE.y + 150;
-const HUNTER_X = BATTLE.x + 130;
-const FOE_X = BATTLE.x + 292;
 const RETRY_SECONDS = 30;
+
+export interface BattleRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 interface Enemy {
   def: MonsterDef;
@@ -68,56 +73,80 @@ export class BattlePanel {
   private partChecks: Phaser.GameObjects.Image[] = [];
   private breakBtn: Button;
   private breakFill: Phaser.GameObjects.Rectangle;
+  private foeBarW = 198;
+  private bgCrop: [number, number];
 
-  constructor(private scene: Phaser.Scene, private hooks: BattleHooks) {
+  // layout: the full screen uses the 400x180 battle panel, the taskbar strip a short wide rect
+  private r: BattleRect;
+  private gy: number; // ground line
+  private hx: number; // hunter x
+  private fx: number; // foe x
+
+  constructor(private scene: Phaser.Scene, private hooks: BattleHooks, rect: BattleRect = BATTLE, compact = false) {
     const s = scene;
-    this.bg = s.add.image(BATTLE.x, BATTLE.y, 'bg_forest').setOrigin(0).setDepth(DEPTH.bg);
+    const r = (this.r = rect);
+    this.gy = compact ? r.y + r.h - 4 : r.y + 150;
+    this.hx = compact ? r.x + Math.round(r.w * 0.3) : r.x + 130;
+    this.fx = compact ? r.x + Math.round(r.w * 0.75) : r.x + 292;
+    // the background art is 400x180 with the ground at y=150; crop it to the rect around the ground line
+    const bgX = r.x - Math.round((400 - r.w) / 2);
+    const bgY = this.gy - 150;
+    this.bgCrop = [r.x - bgX, r.y - bgY];
+    this.bg = s.add.image(bgX, bgY, 'bg_forest').setOrigin(0).setDepth(DEPTH.bg).setCrop(this.bgCrop[0], this.bgCrop[1], r.w, r.h);
 
     const a = s.anims;
-    a.create({ key: 'hunter-idle', frames: a.generateFrameNumbers('hunter', { frames: [0, 1] }), frameRate: 2, repeat: -1 });
-    a.create({ key: 'hunter-attack', frames: a.generateFrameNumbers('hunter', { frames: [2, 3, 4, 4] }), frameRate: 16 });
-    a.create({ key: 'dragon-idle', frames: a.generateFrameNumbers('dragon', { frames: [0, 1] }), frameRate: 2, repeat: -1 });
-    a.create({ key: 'slime-idle', frames: a.generateFrameNumbers('slime', { frames: [0, 1] }), frameRate: 3, repeat: -1 });
-    a.create({ key: 'slash-go', frames: a.generateFrameNumbers('slash', { frames: [0, 1, 2, 3] }), frameRate: 22 });
+    const anim = (key: string, sheet: string, frames: number[], frameRate: number, repeat = 0) => {
+      if (!a.exists(key)) a.create({ key, frames: a.generateFrameNumbers(sheet, { frames }), frameRate, repeat });
+    };
+    anim('hunter-idle', 'hunter', [0, 1], 2, -1);
+    anim('hunter-attack', 'hunter', [2, 3, 4, 4], 16);
+    anim('dragon-idle', 'dragon', [0, 1], 2, -1);
+    anim('slime-idle', 'slime', [0, 1], 3, -1);
+    anim('slash-go', 'slash', [0, 1, 2, 3], 22);
 
-    this.foe = s.add.sprite(FOE_X, GROUND_Y, 'slime').setOrigin(0.5, 1).setDepth(DEPTH.ui).setVisible(false);
-    this.hunter = s.add.sprite(HUNTER_X, GROUND_Y, 'hunter').setOrigin(sprites.hunter.originX, sprites.hunter.originY).setDepth(DEPTH.ui + 1);
+    this.foe = s.add.sprite(this.fx, this.gy, 'slime').setOrigin(0.5, 1).setDepth(DEPTH.ui).setVisible(false);
+    this.hunter = s.add.sprite(this.hx, this.gy, 'hunter').setOrigin(sprites.hunter.originX, sprites.hunter.originY).setDepth(DEPTH.ui + 1);
     this.hunter.play('hunter-idle');
     this.hunter.on(Phaser.Animations.Events.ANIMATION_COMPLETE_KEY + 'hunter-attack', () => this.hunter.play('hunter-idle'));
 
-    this.slash = s.add.sprite(HUNTER_X + 62, GROUND_Y - 26, 'slash').setDepth(DEPTH.ui + 2).setVisible(false);
+    this.slash = s.add.sprite(this.hx + 62, this.gy - 26, 'slash').setDepth(DEPTH.ui + 2).setVisible(false);
     this.slash.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.slash.setVisible(false));
-    this.spark = s.add.image(FOE_X, GROUND_Y - 24, 'slash', 4).setDepth(DEPTH.ui + 3).setVisible(false);
-    this.warn = label(s, FOE_X, GROUND_Y - 100, '!', { size: 'md', color: '#ff5a3a', stroke: true, origin: [0.5, 0.5] })
+    this.spark = s.add.image(this.fx, this.gy - 24, 'slash', 4).setDepth(DEPTH.ui + 3).setVisible(false);
+    this.warn = label(s, this.fx, Math.max(r.y + 12, this.gy - 100), '!', { size: 'md', color: '#ff5a3a', stroke: true, origin: [0.5, 0.5] })
       .setDepth(DEPTH.ui + 3).setVisible(false).setScale(2);
 
     // HUD
-    this.floorText = label(s, BATTLE.x + 6, BATTLE.y + 4, '', { stroke: true }).setDepth(DEPTH.ui + 4);
-    this.foeName = label(s, BATTLE.x + 200, BATTLE.y + 10, '', { size: 'md', color: '#ffe890', stroke: true, origin: [0.5, 0.5] }).setDepth(DEPTH.ui + 4);
-    s.add.rectangle(BATTLE.x + 100, BATTLE.y + 20, 200, 8, 0x241a1c).setOrigin(0).setDepth(DEPTH.ui + 4);
-    this.foeFill = s.add.rectangle(BATTLE.x + 101, BATTLE.y + 21, 198, 6, 0xe8504a).setOrigin(0).setDepth(DEPTH.ui + 4);
+    this.floorText = label(s, r.x + 6, r.y + 4, '', { stroke: true }).setDepth(DEPTH.ui + 4).setVisible(!compact);
+    const barW = compact ? Math.min(160, r.w - 60) : 200;
+    const barX = r.x + Math.round((r.w - barW) / 2);
+    this.foeName = label(s, r.x + r.w / 2, r.y + (compact ? 7 : 10), '', { size: compact ? 'sm' : 'md', color: '#ffe890', stroke: true, origin: [0.5, 0.5] }).setDepth(DEPTH.ui + 4);
+    const barY = r.y + (compact ? 14 : 20);
+    s.add.rectangle(barX, barY, barW, 8, 0x241a1c).setOrigin(0).setDepth(DEPTH.ui + 4);
+    this.foeFill = s.add.rectangle(barX + 1, barY + 1, barW - 2, 6, 0xe8504a).setOrigin(0).setDepth(DEPTH.ui + 4);
+    this.foeBarW = barW - 2;
 
-    this.hpText = label(s, BATTLE.x + 6, BATTLE.y + 153, '', { stroke: true }).setDepth(DEPTH.ui + 4);
-    s.add.rectangle(BATTLE.x + 6, BATTLE.y + 167, 110, 8, 0x241a1c).setOrigin(0).setDepth(DEPTH.ui + 4);
-    this.hpFill = s.add.rectangle(BATTLE.x + 7, BATTLE.y + 168, 108, 6, 0x6cc257).setOrigin(0).setDepth(DEPTH.ui + 4);
+    this.hpText = label(s, r.x + 6, r.y + r.h - (compact ? 23 : 27), '', { stroke: true }).setDepth(DEPTH.ui + 4);
+    s.add.rectangle(r.x + 6, r.y + r.h - (compact ? 10 : 13), 110, 8, 0x241a1c).setOrigin(0).setDepth(DEPTH.ui + 4);
+    this.hpFill = s.add.rectangle(r.x + 7, r.y + r.h - (compact ? 9 : 12), 108, 6, 0x6cc257).setOrigin(0).setDepth(DEPTH.ui + 4);
 
     // part status under the boss HP bar: lit once broken this fight
     BOSS_PARTS.forEach((part, i) => {
-      const x = BATTLE.x + 200 + i * 24;
-      this.partIcons.push(s.add.image(x, BATTLE.y + 40, 'items', ITEMS[part.drop].frame).setDepth(DEPTH.ui + 4).setVisible(false));
-      this.partChecks.push(s.add.image(x + 7, BATTLE.y + 46, 'icons', 8).setDepth(DEPTH.ui + 4).setVisible(false));
+      const x = compact ? r.x + r.w / 2 - 22 + i * 22 : r.x + r.w / 2 + i * 24;
+      const y = compact ? barY + 18 : r.y + 40;
+      this.partIcons.push(s.add.image(x, y, 'items', ITEMS[part.drop].frame).setDepth(DEPTH.ui + 4).setVisible(false));
+      this.partChecks.push(s.add.image(x + 7, y + 6, 'icons', 8).setDepth(DEPTH.ui + 4).setVisible(false));
     });
 
-    this.retryText = label(s, BATTLE.x + 6, BATTLE.y + 80, '', { color: '#ffb0a0', stroke: true }).setDepth(DEPTH.ui + 4);
-    this.retryBtn = button(s, BATTLE.x + 6, BATTLE.y + 94, 64, 18, '지금 도전', () => this.goFront()).setDepth(DEPTH.ui + 4);
+    this.retryText = label(s, r.x + 4, r.y + (compact ? 24 : 80), '', { color: '#ffb0a0', stroke: true }).setDepth(DEPTH.ui + 4);
+    this.retryBtn = button(s, r.x + 4, r.y + (compact ? 37 : 94), 64, 18, '지금 도전', () => this.goFront()).setDepth(DEPTH.ui + 4);
 
     // BREAK
     this.marker = s.add.sprite(0, 0, 'weak', 0).setDepth(DEPTH.ui + 5).setVisible(false).setInteractive({ useHandCursor: true });
     this.marker.on('pointerdown', () => this.tryBreak());
-    this.breakBtn = button(s, BATTLE.x + BATTLE.w - 82, BATTLE.y + BATTLE.h - 44, 76, 34, 'BREAK!', () => this.tryBreak(), {
+    this.breakBtn = button(s, r.x + r.w - 82, r.y + r.h - (compact ? 40 : 44), 76, compact ? 30 : 34, 'BREAK!', () => this.tryBreak(), {
       key: 'btn_yellow', text: { size: 'md' },
     }).setDepth(DEPTH.ui + 5).setVisible(false);
-    this.breakFill = s.add.rectangle(BATTLE.x + BATTLE.w - 78, BATTLE.y + BATTLE.h - 8, 68, 3, 0xff5a3a).setOrigin(0).setDepth(DEPTH.ui + 5).setVisible(false);
+    this.breakFill = s.add.rectangle(r.x + r.w - 78, r.y + r.h - (compact ? 7 : 8), 68, 3, 0xff5a3a).setOrigin(0).setDepth(DEPTH.ui + 5).setVisible(false);
     s.input.keyboard?.on('keydown-SPACE', () => this.tryBreak());
 
     bus.on('hunter', this.refreshHud, this);
@@ -126,7 +155,7 @@ export class BattlePanel {
   // ---------------------------------------------------------------- loop
 
   update(dt: number) {
-    this.refreshHud();
+    if (!sim.fast) this.refreshHud();
     if (this.phase !== 'fight') {
       this.wait -= dt;
       if (this.wait > 0) return;
@@ -189,7 +218,7 @@ export class BattlePanel {
     this.hpFill.width = Math.round(108 * Phaser.Math.Clamp(state.hp / maxHp(), 0, 1));
     const e = this.enemy;
     this.foeName.setText(e ? e.def.name : '');
-    this.foeFill.width = e ? Math.round(198 * Phaser.Math.Clamp(e.hp / e.def.hp, 0, 1)) : 0;
+    this.foeFill.width = e ? Math.round(this.foeBarW * Phaser.Math.Clamp(e.hp / e.def.hp, 0, 1)) : 0;
     BOSS_PARTS.forEach((part, i) => {
       const broken = this.broken.has(part.id);
       this.partIcons[i].setVisible(!!e?.boss).setAlpha(broken ? 1 : 0.6);
@@ -212,7 +241,7 @@ export class BattlePanel {
     this.phase = 'fight';
     this.swing = 0;
     this.hammerHits = 0;
-    this.bg.setTexture(boss ? 'bg_lair' : 'bg_forest');
+    this.bg.setTexture(boss ? 'bg_lair' : 'bg_forest').setCrop(this.bgCrop[0], this.bgCrop[1], this.r.w, this.r.h);
     this.scene.tweens.killTweensOf(this.foe);
     if (boss) {
       this.foe.setTexture('dragon').setOrigin(sprites.dragon.originX, sprites.dragon.originY).play('dragon-idle');
@@ -221,7 +250,7 @@ export class BattlePanel {
     } else {
       this.foe.setTexture('slime').setOrigin(0.5, 1).play('slime-idle');
     }
-    this.foe.setPosition(FOE_X, GROUND_Y).setScale(m.scale).setTint(m.tint).setAlpha(1).setVisible(true);
+    this.foe.setPosition(this.fx, this.gy).setScale(m.scale).setTint(m.tint).setAlpha(1).setVisible(true);
   }
 
   private goFront() {
@@ -243,11 +272,11 @@ export class BattlePanel {
 
   private onKill(e: Enemy) {
     addGold(e.def.gold);
-    floatText(this.scene, FOE_X, GROUND_Y - 50, `+${e.def.gold}G`, '#ffd84a');
+    floatText(this.scene, this.fx, this.gy - 50, `+${e.def.gold}G`, '#ffd84a');
     sfx('coin');
     this.dropLoot(state.floor);
     state.hp = Math.min(maxHp(), state.hp + maxHp() * HUNTER.healOnKill);
-    this.scene.tweens.add({ targets: this.foe, alpha: 0, y: GROUND_Y + 6, duration: 250 });
+    if (!sim.fast) this.scene.tweens.add({ targets: this.foe, alpha: 0, y: this.gy + 6, duration: 250 });
     this.clearEnemy(e.boss ? 2.5 : 0.5);
 
     const f = state.floor;
@@ -277,7 +306,7 @@ export class BattlePanel {
     if (def.kind === 'normal' && Math.random() < DROP.chance) ids.push(`${def.line}1`);
     if (def.kind === 'elite') for (let i = 0; i < DROP.elite.n; i++) ids.push(`${def.line}${DROP.elite.tier}`);
     if (def.kind === 'boss') for (let i = 0; i < DROP.boss.n; i++) ids.push(`${Phaser.Utils.Array.GetRandom(LINES)}${DROP.boss.tier}`);
-    ids.forEach((id, i) => this.hooks.drop(id, FOE_X, GROUND_Y - 20, floor, i * 120));
+    ids.forEach((id, i) => this.hooks.drop(id, this.fx, this.gy - 20, floor, i * 120));
   }
 
   private onDown() {
@@ -302,10 +331,11 @@ export class BattlePanel {
 
   private hunterAttack(e: Enemy) {
     const weapon = weaponDef(state.weapon);
-    this.hunter.play('hunter-attack');
-    this.slash.setVisible(true).play('slash-go');
-    this.scene.time.delayedCall(Math.min(140, weapon.interval * 400), () => {
-      if (this.enemy !== e || this.phase !== 'fight') return;
+    if (!sim.fast) {
+      this.hunter.play('hunter-attack');
+      this.slash.setVisible(true).play('slash-go');
+    }
+    {
       const critChance = HUNTER.critChance + (weapon.id === 'dual' ? HUNTER.dualCrit : 0);
       const crit = Math.random() < critChance;
       this.damageFoe(e, attack() * weaponPower(weapon.id) * (crit ? HUNTER.critMult : 1), crit);
@@ -314,26 +344,28 @@ export class BattlePanel {
       if (weapon.id === 'great' && Math.random() < HUNTER.staggerChance) {
         e.atkTimer = 0;
         e.telegraph = 0;
-        floatText(this.scene, FOE_X, GROUND_Y - 70, '경직!', '#9ad0ff', 'sm');
+        floatText(this.scene, this.fx, this.gy - 70, '경직!', '#9ad0ff', 'sm');
       } else if (weapon.id === 'dual') {
         e.bleed = Math.min(HUNTER.bleedMaxStacks, e.bleed + 1);
       } else if (weapon.id === 'hammer' && ++this.hammerHits >= HUNTER.hammerStunHits) {
         this.hammerHits = 0;
         e.stun = Math.max(e.stun, HUNTER.hammerStun);
         e.telegraph = 0;
-        floatText(this.scene, FOE_X, GROUND_Y - 70, '기절!', '#ffe24a', 'sm');
+        floatText(this.scene, this.fx, this.gy - 70, '기절!', '#ffe24a', 'sm');
       }
-    });
+    }
   }
 
   private damageFoe(e: Enemy, amount: number, crit: boolean, color = '#ffffff') {
     const dmg = Math.max(1, Math.round(amount));
     e.hp -= dmg;
     sfx(crit ? 'crit' : 'hit');
+    if (e.hp <= 0) return this.onKill(e);
+    if (sim.fast) return;
     const jx = Phaser.Math.Between(-14, 14);
-    floatText(this.scene, FOE_X + jx, GROUND_Y - (e.boss ? 70 : 40), crit ? `${dmg}!` : `${dmg}`, crit ? '#ffe24a' : color, crit ? 'md' : 'sm');
+    floatText(this.scene, this.fx + jx, this.gy - (e.boss ? 70 : 40), crit ? `${dmg}!` : `${dmg}`, crit ? '#ffe24a' : color, crit ? 'md' : 'sm');
 
-    this.spark.setPosition(FOE_X - 8 + jx / 2, GROUND_Y - (e.boss ? 40 : 16) * e.def.scale).setVisible(true);
+    this.spark.setPosition(this.fx - 8 + jx / 2, this.gy - (e.boss ? 40 : 16) * e.def.scale).setVisible(true);
     this.scene.time.delayedCall(90, () => this.spark.setVisible(false));
     if (e.boss) {
       this.foe.stop().setFrame(3);
@@ -342,25 +374,25 @@ export class BattlePanel {
       this.foe.stop().setFrame(2);
       this.scene.time.delayedCall(140, () => this.enemy === e && this.foe.play('slime-idle'));
     }
-    if (e.hp <= 0) this.onKill(e);
   }
 
   private foeAttack(e: Enemy, mult: number) {
     const heavy = mult > 1;
+    const dmg = Math.max(1, Math.round(e.def.atk * mult));
+    state.hp -= dmg;
+    if (state.hp <= 0) return this.onDown();
+    if (sim.fast) return;
     if (e.boss) {
       this.foe.stop().setFrame(2);
       this.scene.time.delayedCall(260, () => this.enemy === e && this.foe.play('dragon-idle'));
     }
-    this.scene.tweens.add({ targets: this.foe, x: FOE_X - (heavy ? 44 : 26), duration: 90, yoyo: true, ease: 'Quad.easeOut' });
+    this.scene.tweens.add({ targets: this.foe, x: this.fx - (heavy ? 44 : 26), duration: 90, yoyo: true, ease: 'Quad.easeOut' });
 
-    const dmg = Math.max(1, Math.round(e.def.atk * mult));
-    state.hp -= dmg;
     sfx('hurt');
-    floatText(this.scene, HUNTER_X, GROUND_Y - 56, `-${dmg}`, heavy ? '#ff5a3a' : '#ff9a8a', heavy ? 'md' : 'sm');
+    floatText(this.scene, this.hx, this.gy - 56, `-${dmg}`, heavy ? '#ff5a3a' : '#ff9a8a', heavy ? 'md' : 'sm');
     this.hunter.setTintFill(0xffffff);
     this.scene.time.delayedCall(70, () => this.phase !== 'down' && this.hunter.clearTint());
     if (heavy) this.scene.cameras.main.shake(120, 0.004);
-    if (state.hp <= 0) this.onDown();
   }
 
   /** Uses a potion from the storage first, then from the merge grid. */
@@ -371,7 +403,7 @@ export class BattlePanel {
     this.potionCd = 3;
     const heal = maxHp() * (id === 'herb4' ? 1 : 0.5);
     state.hp = Math.min(maxHp(), state.hp + heal);
-    floatText(this.scene, HUNTER_X, GROUND_Y - 60, `${ITEMS[id].name} +${Math.round(heal)}`, '#8ee06a', 'sm');
+    floatText(this.scene, this.hx, this.gy - 60, `${ITEMS[id].name} +${Math.round(heal)}`, '#8ee06a', 'sm');
   }
 
   // ---------------------------------------------------------------- BREAK
@@ -393,7 +425,7 @@ export class BattlePanel {
     const part = BOSS_PARTS[this.weakPart];
     this.weakTotal = BREAK.window * (state.weapon === 'hammer' ? HUNTER.hammerWindowMult : 1);
     this.weakLeft = this.weakTotal;
-    this.marker.setPosition(FOE_X + part.dx, GROUND_Y + part.dy).setVisible(true);
+    this.marker.setPosition(this.fx + part.dx, this.gy + part.dy).setVisible(true);
     sfx('warn');
     this.breakBtn.setVisible(true);
     this.breakFill.setVisible(true);
@@ -411,8 +443,8 @@ export class BattlePanel {
     const e = this.enemy;
     if (!e || this.weakLeft <= 0 || this.phase !== 'fight') return;
     const part = BOSS_PARTS[this.weakPart];
-    const px = FOE_X + part.dx;
-    const py = GROUND_Y + part.dy;
+    const px = this.fx + part.dx;
+    const py = this.gy + part.dy;
     this.hideWeak();
 
     e.stun = BREAK.stun;
